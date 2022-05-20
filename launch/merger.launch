@@ -1,0 +1,5 @@
+<launch>
+  <node name="merger" pkg="pymerger" type="merger.py">
+    <param name="maps" value="tb3_0/map tb3_1/map tb3_2/map" type="str"/> 
+  </node>
+</launch>
