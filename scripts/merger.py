@@ -2,24 +2,6 @@
 # coding=utf-8
 
 '''
-isso aqui roda junto com o ROS (www.ros.org) q é um sistem q coordena 
-aplicações de robotica. tudo o que precisa saber é que ele trabalha com 
-tópicos, entao o rospy.Subscriber vai receber os mapas, o Publisher vai 
-publicar o mapa global. As coisas com tf2 são pra dizer qual as posições
-dos mapas locais em relação ao mapa global.
-
-a ideia é que tem uma arvore de mapas. assim 
- M
-(h)
-S M
- (h)
- ...
- S M
-  (h)
-  S S
-S são folhas e são os dados reais que vem dos robos. 
-O lado esquerdo eu chamo de src e o direito de dst.
-(h) é uma transformação afim parcial que transforma src para dst. 
 
 '''
 import rospy 
@@ -35,8 +17,7 @@ import threading
 from itertools import permutations
 
 class Map(object):
-    # valores padrão na representação em mapa (OccupancyGrid)
-    # e em imagem (np com opencv)
+    #  default values for OccupancyGrid and image
     free_img = 255
     free_map = 0
     free_map_thresh = 25
@@ -47,7 +28,7 @@ class Map(object):
     unexplored_map = -1
 
     def __init__(self):
-        self.lock = threading.Lock()
+        self.data_lock = threading.Lock()
         self.h_lock = threading.Lock()
         self.data = None
         self.parent = None
@@ -56,13 +37,13 @@ class Map(object):
         self.H = None
     
     def get_data(self):
-        with self.lock:
+        with self.data_lock:
             if (self.data is None) or (len(self.data) == 0):
                 self.compute_data()
             return self.data
     
     def get_occ_grid_data(self):
-        # transforma a representacao em imagem pra OccupancyGrid que o ROS entende como mapa
+        # converts image to OccupancyGrid, returns OccupancyGrid
         img = self.get_data()
         if (img is None) or (len(img) == 0):
             return []
@@ -73,7 +54,7 @@ class Map(object):
         return occ.tolist()
     
     def compute_data(self):
-        # recursivamente monta o mapa 
+        # recursively  puts resulting map image together
         s,d = self.src.get_data(), self.dst.get_data()
         if (len(s) == 0) or (len(d) == 0):
             return
@@ -88,10 +69,10 @@ class Map(object):
         res = cv.addWeighted(d, alpha, src_trans, beta, 0.0) # soma as duas imgs
         v = self.unexplored_img
         res = np.piecewise(res, [res<v,res==v,res>v], [0,205,255]) 
-        # pra cada e no mapa:
-        # se e<inexplorado, e é ocupado
-        # se e=inexplorado, e é inexplorado
-        # se e>inexplorado, e é ocupado 
+        # for each e in the map:
+        # if e<unexplored, e is occupied
+        # if e=unexplored, e is unexplored
+        # if e>unexplored, e is free
         self.data = res
     
     def update_match(self):
@@ -119,9 +100,9 @@ class Map(object):
             return self.H
     
     def get_transforms(self):
-        # recursivamente gera uma lista de tuplas (ns, h)
-        # com ns: nome do mapa
-        #      h: transformacao pro mapa global 
+        # recursively generates a list of tuples (ns, h)
+        # with ns: map namespace
+        #      h: transform to global map 
         dst_ts = self.dst.get_transforms()
         _, last_h = dst_ts[-1]
         ts = []
@@ -133,7 +114,7 @@ class Map(object):
         self.parent = parent
     
 class SubMap(Map):
-# classe especial pra mapas que recebem os mapas dos robos diretamente
+# class that receives map info directly from the robot's map topic
     def __init__(self, ns, merger=None):
         super(SubMap, self).__init__()
         self.merger = merger
@@ -141,8 +122,9 @@ class SubMap(Map):
         self.sub = rospy.Subscriber(ns+'/map', OccupancyGrid, self.update_map)
 
     def update_map(self, m):
-        # função que é chamada cada vez que o sistema recebe um mapa novo do robo 
-        with self.lock:
+        # map topic callback
+        print("map update")
+        with self.data_lock:
             self.info = m.info
             w = m.info.width 
             h = m.info.height
@@ -165,7 +147,7 @@ class SubMap(Map):
         return 
 
     def get_data(self):
-        with self.lock:
+        with self.data_lock:
             if self.data is not None:
                 return self.data
             else:
@@ -181,7 +163,7 @@ class SubMap(Map):
             return True
 
 def match(src_map, dst_map):
-    # match de dois mapas
+    # map matching
     if (src_map is None) or (dst_map is None):
         return None
 
@@ -191,20 +173,20 @@ def match(src_map, dst_map):
     if (len(src)==0) or (len(dst)==0):
         return None
     
-    # binarizacao para que apenas os obstaculos influenciem no match
+    # joining free and unexplored regions so that only obstacles influence matches
     _,src_bin = cv.threshold(src, src_map.unexplored_img+1, 255, cv.THRESH_BINARY)
     _,dst_bin = cv.threshold(dst, dst_map.unexplored_img+1, 255, cv.THRESH_BINARY)
 
-    # deteccao dos key points e computacao dos descritores
+    # key point detection and descriptor computation with ORB
     orb = cv.ORB_create()
     kps, dess = orb.detectAndCompute(src_bin, None)
     kpd, desd = orb.detectAndCompute(dst_bin, None)
 
-    # matching dos descritores com Brute Force
+    # matching descriptors with BruteForce Matcher
     bf = cv.BFMatcher(cv.NORM_HAMMING, crossCheck=True)
     matches = bf.match(dess,desd)
 
-    # escolhe os 30% melhores matches
+    # choose 30% best matches (or at least 6)
     matches = sorted(matches, key = lambda x:x.distance)
     numGoodMatches = int(len(matches) * 0.30) 
     if numGoodMatches < 6:
@@ -218,7 +200,7 @@ def match(src_map, dst_map):
         points1[i,:] = kps[match.queryIdx].pt
         points2[i,:] = kpd[match.trainIdx].pt
 
-    # estimacao da transformacao afim parcial 
+    # rigid (or partial affine) transform estimation 
     h,_ = cv.estimateAffinePartial2D(points1, points2, method=cv.RANSAC)
     return h
 
@@ -228,15 +210,14 @@ def good_match(h, src, dst):
     if len(h) == 0:
         return False
 
-    # pela definicao da matrix de trans. afim parcial:
+    # by the fdefinition of a rigid transform
     theta = np.arctan(h[1,0]/h[0,0])
     s = h[0,0]/np.cos(theta)
 
-    # o valor de escala (uniforme) correto pode ser obtido pela resolucao dos mapas.
-    # 
+    # the ground truth for the scale value can be infered with the resolution info from the maps
     s_truth = np.sqrt(dst.info.resolution/src.info.resolution)
 
-    # filtra trans. que divergem do valor real
+    # filter transforms that diverge from said ground truth
     tolerance = 0.01
     if (s >= s_truth - tolerance) and (s <= s_truth + tolerance) :
         return True 
@@ -245,7 +226,7 @@ def good_match(h, src, dst):
 
 
 class Merger():
-    # maneja a criação e mantimento da arvore de mapas
+    # manages map tree 
     def __init__(self, sub_list):
         self.lock = threading.Lock()
         self.updated = False
@@ -255,13 +236,11 @@ class Merger():
         self.global_map = None
         
     def update(self):
-        # toda vez q um SubMap é atualizado ele avisa o merger
         with self.lock:
             print('Local maps updated')
             self.updated = True
         
     def run(self):
-        # funçao principal
         print('Running merger')
         rate = rospy.Rate(10)
         while not rospy.is_shutdown():
@@ -289,7 +268,7 @@ class Merger():
             rate.sleep()
 
     def add_unmatched(self):
-        if self.global_map is None: #se o mapa inicial ainda nao foi
+        if self.global_map is None: 
             for s, d in permutations(list(range(len(self.unmatched))),2):
                 h = match(self.unmatched[s],self.unmatched[d])
                 if good_match(h,self.unmatched[s],self.unmatched[d]):
@@ -326,6 +305,7 @@ class Merger():
     def tf_broadcast(self):
         br = tf2_ros.TransformBroadcaster()
         ts = self.global_map.get_transforms()
+        print(ts)
         for ns, h in ts:
             t = TransformStamped()
 
