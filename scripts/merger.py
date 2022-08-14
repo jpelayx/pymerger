@@ -62,17 +62,17 @@ class Map(object):
             return
 
         h,w = d.shape
-        src_trans = cv.warpAffine(s, self.get_H(), (w,h)) # aplica a transformacao
+        src_trans = cv.warpAffine(s, self.get_H(), (w,h)) # applies rigid transform
 
         alpha = 0.5
         beta  = 1.0 - alpha 
-        res = cv.addWeighted(d, alpha, src_trans, beta, 0.0) # soma as duas imgs
+        res = cv.addWeighted(d, alpha, src_trans, beta, 0.0) # adds imgs
         v = self.unexplored_img
         res = np.piecewise(res, [res<v,res==v,res>v], [0,205,255]) 
-        # for each e in the map:
-        # if e<unexplored, e is occupied
-        # if e=unexplored, e is unexplored
-        # if e>unexplored, e is free
+        # for each cell e in the map:
+        # if e < unexplored, e is occupied
+        # if e = unexplored, e is unexplored
+        # if e > unexplored, e is free
         self.data = res
     
     def update_match(self):
@@ -102,7 +102,7 @@ class Map(object):
     def get_transforms(self):
         # recursively generates a list of tuples (ns, h)
         # with ns: map namespace
-        #      h: transform to global map 
+        #       h: transform to global map 
         dst_ts = self.dst.get_transforms()
         _, last_h = dst_ts[-1]
         ts = []
@@ -141,7 +141,6 @@ class SubMap(Map):
                 else :
                     self.data[i%w][(int)(i/w)] = self.free_img
             self.merger.update()
-            # cv.imwrite('/home/julia/catkin_ws/src/pymerger/media/'+self.ns.replace('/','_')+'.png', self.data)
 
     def update_match(self):
         return 
@@ -154,6 +153,7 @@ class SubMap(Map):
                 return []
     
     def get_transforms(self):
+        # id 
         return [(self.ns, np.eye(2,3,dtype=np.double))]
 
     def valid_data(self):
@@ -210,7 +210,7 @@ def good_match(h, src, dst):
     if len(h) == 0:
         return False
 
-    # by the fdefinition of a rigid transform
+    # by the definition of a rigid transform
     theta = np.arctan(h[1,0]/h[0,0])
     s = h[0,0]/np.cos(theta)
 
