@@ -119,7 +119,12 @@ class SubMap(Map):
         super(SubMap, self).__init__()
         self.merger = merger
         self.ns = ns
-        self.sub = rospy.Subscriber(ns+'/map', OccupancyGrid, self.update_map)
+        if(self.ns[0] == '/'):
+            self.ns = self.ns[1:]
+        if(self.ns[-1] == '/'):
+            self.ns = self.ns[:-1]
+            
+        self.sub = rospy.Subscriber('/'+ns+'/map', OccupancyGrid, self.update_map)
 
     def update_map(self, m):
         # map topic callback
@@ -257,10 +262,10 @@ class Merger():
                     og = OccupancyGrid()
                     og.data = self.global_map.get_occ_grid_data()
                     og.info = self.global_map.info
-                    # og.header.seq = self.map_seq
-                    # self.map_seq += 1
+                    og.header.seq = self.map_seq
+                    self.map_seq += 1
                     og.header.stamp = rospy.Time.now()
-                    # og.header.frame_id = '/map'
+                    og.header.frame_id = 'map'
                     self.map_pub.publish(og)
                     # cv.imwrite('/home/julia/catkin_ws/src/pymerger/media/gmap.png', d)
             if self.global_map is not None:
